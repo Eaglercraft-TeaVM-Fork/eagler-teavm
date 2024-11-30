@@ -25,15 +25,19 @@ import org.teavm.backend.wasm.model.expression.WasmIntType;
 import org.teavm.backend.wasm.runtime.StringInternPool;
 import org.teavm.backend.wasm.runtime.gc.WasmGCResources;
 import org.teavm.common.ServiceRepository;
+import org.teavm.interop.Address;
+import org.teavm.interop.DirectMalloc;
 import org.teavm.model.ClassReaderSource;
 import org.teavm.model.MethodReference;
 import org.teavm.model.ValueType;
+import org.teavm.runtime.LaxMalloc;
 
 public class WasmGCIntrinsics implements WasmGCIntrinsicProvider {
     private Map<MethodReference, IntrinsicContainer> intrinsics = new HashMap<>();
     private List<WasmGCIntrinsicFactory> factories;
     private ClassReaderSource classes;
     private ServiceRepository services;
+    private LaxMallocIntrinsic laxMallocIntrinsic;
 
     public WasmGCIntrinsics(ClassReaderSource classes, ServiceRepository services,
             List<WasmGCIntrinsicFactory> factories, Map<MethodReference, WasmGCIntrinsic> customIntrinsics) {
@@ -51,6 +55,9 @@ public class WasmGCIntrinsics implements WasmGCIntrinsicProvider {
         fillArray();
         fillString();
         fillResources();
+        fillDirectMalloc();
+        fillLaxMalloc();
+        fillAddress();
         for (var entry : customIntrinsics.entrySet()) {
             add(entry.getKey(), entry.getValue());
         }
@@ -166,6 +173,58 @@ public class WasmGCIntrinsics implements WasmGCIntrinsicProvider {
         add(new MethodReference(WasmGCResources.class, "readSingleByte", int.class, int.class), intrinsic);
     }
 
+    private void fillDirectMalloc() {
+        var intrinsic = new DirectMallocIntrinsic();
+        add(new MethodReference(DirectMalloc.class, "malloc", int.class, Address.class), intrinsic);
+        add(new MethodReference(DirectMalloc.class, "calloc", int.class, Address.class), intrinsic);
+        add(new MethodReference(DirectMalloc.class, "free", Address.class, void.class), intrinsic);
+        add(new MethodReference(DirectMalloc.class, "memcpy", Address.class, Address.class, int.class, void.class),
+                intrinsic);
+        add(new MethodReference(DirectMalloc.class, "memset", Address.class, int.class, int.class, void.class),
+                intrinsic);
+        add(new MethodReference(DirectMalloc.class, "zmemset", Address.class, int.class, void.class), intrinsic);
+    }
+
+    private void fillLaxMalloc() {
+        laxMallocIntrinsic = new LaxMallocIntrinsic();
+        add(new MethodReference(LaxMalloc.class, "addrHeap", int.class, Address.class), laxMallocIntrinsic);
+        add(new MethodReference(LaxMalloc.class, "growHeapOuter", int.class, int.class), laxMallocIntrinsic);
+        add(new MethodReference(LaxMalloc.class, "getHeapMinAddr", Address.class), laxMallocIntrinsic);
+        add(new MethodReference(LaxMalloc.class, "getHeapMaxAddr", Address.class), laxMallocIntrinsic);
+    }
+
+    private void fillAddress() {
+        var intrinsic = new AddressIntrinsic();
+        add(new MethodReference(Address.class, "add", int.class, Address.class), intrinsic);
+        add(new MethodReference(Address.class, "add", long.class, Address.class), intrinsic);
+        add(new MethodReference(Address.class, "isLessThan", Address.class, boolean.class), intrinsic);
+        add(new MethodReference(Address.class, "toInt", int.class), intrinsic);
+        add(new MethodReference(Address.class, "toLong", long.class), intrinsic);
+        //add(new MethodReference(Address.class, "toStructure", ?????), intrinsic); //TODO
+        add(new MethodReference(Address.class, "getByte", byte.class), intrinsic);
+        add(new MethodReference(Address.class, "putByte", byte.class, void.class), intrinsic);
+        add(new MethodReference(Address.class, "getChar", char.class), intrinsic);
+        add(new MethodReference(Address.class, "putChar", char.class, void.class), intrinsic);
+        add(new MethodReference(Address.class, "getShort", short.class), intrinsic);
+        add(new MethodReference(Address.class, "putShort", short.class, void.class), intrinsic);
+        add(new MethodReference(Address.class, "getInt", int.class), intrinsic);
+        add(new MethodReference(Address.class, "putInt", int.class, void.class), intrinsic);
+        add(new MethodReference(Address.class, "getLong", long.class), intrinsic);
+        add(new MethodReference(Address.class, "putLong", long.class, void.class), intrinsic);
+        add(new MethodReference(Address.class, "getFloat", float.class), intrinsic);
+        add(new MethodReference(Address.class, "putFloat", float.class, void.class), intrinsic);
+        add(new MethodReference(Address.class, "getDouble", double.class), intrinsic);
+        add(new MethodReference(Address.class, "putDouble", double.class, void.class), intrinsic);
+        add(new MethodReference(Address.class, "getAddress", Address.class), intrinsic);
+        add(new MethodReference(Address.class, "putAddress", Address.class, void.class), intrinsic);
+        add(new MethodReference(Address.class, "fromInt", int.class, Address.class), intrinsic);
+        add(new MethodReference(Address.class, "fromLong", long.class, Address.class), intrinsic);
+        add(new MethodReference(Address.class, "align", Address.class, int.class, Address.class), intrinsic);
+        add(new MethodReference(Address.class, "sizeOf", int.class), intrinsic);
+        add(new MethodReference(Address.class, "add", Class.class, int.class), intrinsic);
+        add(new MethodReference(Address.class, "diff", Address.class, long.class), intrinsic);
+    }
+
     private void add(MethodReference methodRef, WasmGCIntrinsic intrinsic) {
         intrinsics.put(methodRef, new IntrinsicContainer(intrinsic));
     }
@@ -185,6 +244,12 @@ public class WasmGCIntrinsics implements WasmGCIntrinsicProvider {
             result = new IntrinsicContainer(intrinsic);
         }
         return result.intrinsic;
+    }
+
+    public void setupLaxMallocHeap(int heapAddr, int heapSegmentMinAddr, int heapSegmentMaxAddr) {
+        laxMallocIntrinsic.setHeapLocation(heapAddr);
+        laxMallocIntrinsic.setHeapMinAddr(heapSegmentMinAddr);
+        laxMallocIntrinsic.setHeapMaxAddr(heapSegmentMaxAddr);
     }
 
     static class IntrinsicContainer {

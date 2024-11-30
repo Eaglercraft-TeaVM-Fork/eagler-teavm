@@ -33,6 +33,7 @@ import org.teavm.backend.wasm.gc.TeaVMWasmGCHost;
 import org.teavm.backend.wasm.gc.WasmGCClassConsumer;
 import org.teavm.backend.wasm.gc.WasmGCClassConsumerContext;
 import org.teavm.backend.wasm.gc.WasmGCDependencies;
+import org.teavm.backend.wasm.generate.gc.LaxMallocInitializerContributor;
 import org.teavm.backend.wasm.generate.gc.WasmGCDeclarationsGenerator;
 import org.teavm.backend.wasm.generate.gc.WasmGCNameProvider;
 import org.teavm.backend.wasm.generate.gc.classes.WasmGCCustomTypeMapperFactory;
@@ -47,6 +48,7 @@ import org.teavm.backend.wasm.intrinsics.gc.WasmGCIntrinsics;
 import org.teavm.backend.wasm.model.WasmCustomSection;
 import org.teavm.backend.wasm.model.WasmFunction;
 import org.teavm.backend.wasm.model.WasmLocal;
+import org.teavm.backend.wasm.model.WasmMemorySegment;
 import org.teavm.backend.wasm.model.WasmModule;
 import org.teavm.backend.wasm.model.WasmTag;
 import org.teavm.backend.wasm.model.WasmType;
@@ -72,10 +74,13 @@ import org.teavm.model.ListableClassHolderSource;
 import org.teavm.model.MethodReader;
 import org.teavm.model.MethodReference;
 import org.teavm.model.Program;
+import org.teavm.model.lowlevel.Characteristics;
+import org.teavm.model.lowlevel.LowLevelNullCheckFilter;
 import org.teavm.model.transformation.BoundCheckInsertion;
 import org.teavm.model.transformation.NullCheckFilter;
 import org.teavm.model.transformation.NullCheckInsertion;
 import org.teavm.model.util.VariableCategoryProvider;
+import org.teavm.runtime.LaxMalloc;
 import org.teavm.vm.BuildTarget;
 import org.teavm.vm.TeaVMTarget;
 import org.teavm.vm.TeaVMTargetController;
@@ -83,7 +88,8 @@ import org.teavm.vm.spi.TeaVMHostExtension;
 
 public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
     private TeaVMTargetController controller;
-    private NullCheckInsertion nullCheckInsertion = new NullCheckInsertion(NullCheckFilter.EMPTY);
+    private Characteristics characteristics;
+    private NullCheckInsertion nullCheckInsertion;
     private BoundCheckInsertion boundCheckInsertion = new BoundCheckInsertion();
     private boolean strict;
     private boolean obfuscated;
@@ -99,6 +105,9 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
     private List<WasmGCCustomGeneratorFactory> customGeneratorFactories = new ArrayList<>();
     private EntryPointTransformation entryPointTransformation = new EntryPointTransformation();
     private List<WasmGCClassConsumer> classConsumers = new ArrayList<>();
+    private boolean enableDirectMallocSupport;
+    private int directMallocMinHeapSize = 0x10000;
+    private int directMallocMaxHeapSize = 0x10000000;
 
     public void setObfuscated(boolean obfuscated) {
         this.obfuscated = obfuscated;
@@ -126,6 +135,18 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
 
     public void setSourceMapLocation(String sourceMapLocation) {
         this.sourceMapLocation = sourceMapLocation;
+    }
+
+    public void setEnableDirectMallocSupport(boolean enable) {
+        this.enableDirectMallocSupport = enable;
+    }
+
+    public void setDirectMallocMinHeapSize(int minHeapSize) {
+        this.directMallocMinHeapSize = WasmRuntime.align(minHeapSize, WasmHeap.PAGE_SIZE);
+    }
+
+    public void setDirectMallocMaxHeapSize(int maxHeapSize) {
+        this.directMallocMaxHeapSize = WasmRuntime.align(maxHeapSize, WasmHeap.PAGE_SIZE);
     }
 
     @Override
@@ -161,6 +182,8 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
     @Override
     public void setController(TeaVMTargetController controller) {
         this.controller = controller;
+        characteristics = new Characteristics(controller.getUnprocessedClassSource());
+        nullCheckInsertion = new NullCheckInsertion(new LowLevelNullCheckFilter(characteristics));
     }
 
     @Override
@@ -194,6 +217,9 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
         var deps = new WasmGCDependencies(dependencyAnalyzer);
         deps.contribute();
         deps.contributeStandardExports();
+        if (enableDirectMallocSupport) {
+            deps.contributeDirectMalloc();
+        }
     }
 
     @Override
@@ -246,6 +272,7 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
                 controller.getClassInitializerInfo(),
                 controller.getDependencyInfo(),
                 controller.getDiagnostics(),
+                characteristics,
                 customGenerators,
                 intrinsics,
                 customTypeMapperFactories,
@@ -282,9 +309,27 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
             refQueueSupplyFunction.setExportName("teavm.reportGarbageCollectedValue");
         }
 
+        if(enableDirectMallocSupport) {
+            var laxMallocClinitRef = new MethodReference(LaxMalloc.class, "<clinit>", void.class);
+            if (controller.getDependencyInfo().getMethod(laxMallocClinitRef) != null) {
+                var laxMallocClinit = declarationsGenerator.functions().forStaticMethod(laxMallocClinitRef);
+                declarationsGenerator.addEarlyInitializerContributor(new LaxMallocInitializerContributor(laxMallocClinit));
+            }
+        }
+
         moduleGenerator.generate();
         customGenerators.contributeToModule(module);
         generateExceptionExports(declarationsGenerator);
+        if (enableDirectMallocSupport) {
+            var heapSegmentStart = 0;
+            if (!module.getSegments().isEmpty()) {
+                var lastSegment = module.getSegments().get(module.getSegments().size() - 1);
+                heapSegmentStart = WasmRuntime.align(lastSegment.getOffset()
+                        + lastSegment.getLength(), WasmHeap.PAGE_SIZE);
+            }
+            intrinsics.setupLaxMallocHeap(heapSegmentStart, heapSegmentStart + directMallocMinHeapSize,
+                    heapSegmentStart + directMallocMaxHeapSize);
+        }
         adjustModuleMemory(module);
 
         emitWasmFile(module, buildTarget, outputName, debugInfoBuilder);
@@ -390,9 +435,16 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
             return;
         }
 
-        var pages = (memorySize - 1) / WasmHeap.PAGE_SIZE + 1;
-        module.setMinMemorySize(pages);
-        module.setMaxMemorySize(pages);
+        if (enableDirectMallocSupport) {
+            var minPages = (memorySize - 1) / WasmHeap.PAGE_SIZE + 1;
+            var maxPages = minPages + (directMallocMaxHeapSize - 1) / WasmHeap.PAGE_SIZE + 1;
+            module.setMinMemorySize(minPages);
+            module.setMaxMemorySize(maxPages);
+        } else {
+            var pages = (memorySize - 1) / WasmHeap.PAGE_SIZE + 1;
+            module.setMinMemorySize(pages);
+            module.setMaxMemorySize(pages);
+        }
     }
 
     private void emitWasmFile(WasmModule module, BuildTarget buildTarget, String outputName,

@@ -44,6 +44,7 @@ import org.teavm.model.analysis.ClassInitializerInfo;
 import org.teavm.model.analysis.ClassMetadataRequirements;
 import org.teavm.model.classes.TagRegistry;
 import org.teavm.model.classes.VirtualTableBuilder;
+import org.teavm.model.lowlevel.Characteristics;
 
 public class WasmGCDeclarationsGenerator {
     public final ClassHierarchy hierarchy;
@@ -61,6 +62,7 @@ public class WasmGCDeclarationsGenerator {
             ClassInitializerInfo classInitializerInfo,
             DependencyInfo dependencyInfo,
             Diagnostics diagnostics,
+            Characteristics characteristics,
             WasmGCCustomGeneratorProvider customGenerators,
             WasmGCIntrinsicProvider intrinsics,
             List<WasmGCCustomTypeMapperFactory> customTypeMapperFactories,
@@ -83,6 +85,7 @@ public class WasmGCDeclarationsGenerator {
                 functionTypes,
                 names,
                 diagnostics,
+                characteristics,
                 customGenerators,
                 intrinsics,
                 strict,
@@ -177,5 +180,9 @@ public class WasmGCDeclarationsGenerator {
 
     public void addToInitializer(Consumer<WasmFunction> contributor) {
         methodGenerator.getGenerationContext().addToInitializer(contributor);
+    }
+
+    public void addEarlyInitializerContributor(WasmGCInitializerContributor contributor) {
+        initializerContributors.add(contributor);
     }
 }
