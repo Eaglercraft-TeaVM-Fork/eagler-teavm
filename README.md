@@ -1,3 +1,32 @@
+# eagler-teavm
+
+### Branch: eagler-r1
+
+Fork of TeaVM for compiling EaglercrafX's WASM GC runtime
+
+#### Changes in this fork:
+- Implemented malloc/free in TeaVM's WASM GC backend for allocating direct buffers from a `WebAssembly.Memory`
+- Implemented memset and memcpy intrinsic functions
+- Made TeaVM's `Address` class work in the WASM GC backend
+- Added support for the `@Unmanaged` annotation in the WASM GC backend
+
+#### New API Additions
+
+### `org.teavm.interop.DirectMalloc`
+- **`public static native Address malloc(int sizeBytes);`** - Allocates `sizeBytes` of memory from the WebAssembly memory object, if the integer value of the returned address is 0 then the program has run out of memory
+- **`public static native Address calloc(int sizeBytes);`** - Allocates `sizeBytes` of memory from the WebAssembly memory object and fills it with zeros, returns 0 if out of memory
+- **`public static native void free(Address ptr);`** - Frees an address that was previously allocated with malloc or calloc, bad things will happen if you free an address that was never allocated
+- **`public static native void memcpy(Address dst, Address src, int count);`** - Intrinsic, uses the `memory.copy` instruction to efficiently copy `count` bytes from `src` address to `dst` address
+- **`public static native void memset(Address ptr, int val, int count);`** - Intrinsic, uses the `memory.fill` instruction to fill `count` bytes at `ptr` address with bytes of `val` value
+- **`public static native void zmemset(Address ptr, int count);`** - Intrinsic, uses the `memory.fill` instruction to fill `count` bytes at `ptr` address with zeros
+
+### build.gradle: `teavm.wasmGC` section
+- **`directMallocSupport`** - Set to `true` to enable the DirectMalloc class in your build
+- **`minHeapSize`** - Initial DirectMalloc heap size in megabytes
+- **`maxHeapSize`** - Maximum DirectMalloc heap size in megabytes
+
+You will not recieve support from the developer of TeaVM regarding any issues caused by this fork!
+
 # TeaVM
 
 [![.github/workflows/ci.yml](https://github.com/konsoletyper/teavm/actions/workflows/ci.yml/badge.svg)](https://github.com/konsoletyper/teavm/actions/workflows/ci.yml)
