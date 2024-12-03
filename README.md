@@ -2,7 +2,7 @@
 
 ### Branch: eagler-r1
 
-Fork of TeaVM for compiling EaglercrafX's WASM GC runtime
+Fork of TeaVM for compiling EaglercraftX's WASM GC runtime
 
 #### Changes in this fork:
 - Implemented malloc/free in TeaVM's WASM GC backend for allocating direct buffers from a `WebAssembly.Memory`
